@@ -1,108 +1,147 @@
 package plug
 
 import (
-	"encoding/hex"
+	"encoding/binary"
+	"fmt"
 	"log"
+	"net"
 	"strconv"
-	"strings"
 	"syscall"
+	"time"
 )
 
 type SocketPlug interface {
-	Connect(ip string, port int) (syscall.Handle, error)
 	Send(msg string) error
 	Receive(len int) (string, error)
+	Discover() error
 }
-
-func init() {
-	var wsadata syscall.WSAData
-	if err := syscall.WSAStartup(MAKEWORD(2, 2), &wsadata); err != nil {
-		log.Printf("Startup error, [%s]\n", err)
-		return
-	}
-}
-
-func MAKEWORD(low, high uint8) uint32 {
-	var ret = uint16(high)<<8 + uint16(low)
-	return uint32(ret)
-}
-
-const DISCOVER_HEX = "21310020ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 
 type Socket struct {
-	fd syscall.Handle
-	sa syscall.Sockaddr
+	conn     *net.UDPConn
+	token    []byte
+	discover *discover
 }
 
-func NewSocket(ip string, port int) (*Socket, error) {
-	plugSocket := Socket{}
-	return plugSocket.Connect(ip, port)
+type discover struct {
+	deviceId uint32
+	stamp    uint32
 }
 
-// Connect setup Socket Handle
-func (s *Socket) Connect(ip string, port int) (*Socket, error) {
-	// chuangmi_plug connect use udp,set socket type to SOCK_DGRAM
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_IP)
-	if err != nil {
+const MaxBufferSize = 2048
+
+func NewSocket(ip string, port int, token string) (*Socket, error) {
+	var (
+		udpAddr *net.UDPAddr
+		conn    *net.UDPConn
+		t       []byte
+		err     error
+	)
+	if udpAddr, err = net.ResolveUDPAddr("udp4", ip+":"+strconv.Itoa(port)); err != nil {
 		return nil, err
 	}
-
-	if err = syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1); err != nil {
+	if conn, err = net.DialUDP("udp4", nil, udpAddr); err != nil {
 		return nil, err
 	}
-
-	s.sa = &syscall.SockaddrInet4{
-		Port: port,
-		Addr: inetAddr(ip),
-	}
-
-	if err = syscall.Connect(fd, s.sa); err != nil {
+	if t, err = syscall.ByteSliceFromString(token); err != nil {
 		return nil, err
 	}
-	s.fd = fd
-	return s, nil
-}
-
-func send(fd syscall.Handle, buf syscall.WSABuf) error {
-	//var buf syscall.WSABuf
-	var written uint32
-	//buf.Buf, _ = syscall.BytePtrFromString(msg)
-	//buf.Len = uint32(len(msg))
-	err := syscall.WSASend(fd, &buf, 1, &written, 0, nil, nil)
-	if err != nil {
-		log.Printf("write error [%s]\n", err)
-		return err
-	}
-	return nil
+	return &Socket{conn, t, nil}, nil
 }
 
 // Discover the devices at given network
-func (s Socket) Discover() error {
-	var (
-		d   []byte
-		err error
-	)
-	if d, err = hex.DecodeString(DISCOVER_HEX); err != nil {
+func (s *Socket) Discover() error {
+	request := NewPowerRequest(s.token, "hello")
+	if _, err := s.conn.Write(request); err != nil {
 		return err
 	}
-	if err := syscall.Sendto(s.fd, d, 0, s.sa); err != nil {
+	response, err := readResponse(s.conn)
+	if err != nil {
+		return err
+	}
+	s.discover, err = parseDiscoverRes(response)
+	if err != nil {
 		return err
 	}
 	return nil
 }
 
-// inetAddr is used to convert ip string to ip byte
-func inetAddr(ipaddr string) [4]byte {
-	var (
-		ips = strings.Split(ipaddr, ".")
-		ip  [4]uint64
-		ret [4]byte
-	)
-	for i := 0; i < 4; i++ {
-		ip[i], _ = strconv.ParseUint(ips[i], 10, 8)
+func parseDiscoverRes(res []byte) (*discover, error) {
+	if len(res) != 32 {
+		return nil, fmt.Errorf("expected 32 bytes, got %d", len(res))
 	}
-	for i := 0; i < 4; i++ {
-		ret[i] = byte(ip[i])
+	return &discover{
+		deviceId: binary.BigEndian.Uint32(res[8:]),
+		stamp:    binary.BigEndian.Uint32(res[12:]),
+	}, nil
+}
+
+func (s Socket) PowerOff() error {
+	request := NewPowerRequest(s.token, "off")
+	if _, err := s.conn.Write(request); err != nil {
+		return err
 	}
-	return ret
+	response, err := readResponse(s.conn)
+	if err != nil {
+		return err
+	}
+	fmt.Println(response)
+	if len(response) < 32 {
+		return fmt.Errorf("lost data while power off,at least 32 bytes,but got %d", len(response))
+	}
+	return nil
+}
+
+func (s Socket) PowerOn() error {
+	request := NewPowerRequest(s.token, "on")
+	if _, err := s.conn.Write(request); err != nil {
+		return err
+	}
+	response, err := readResponse(s.conn)
+	if err != nil {
+		return err
+	}
+	if len(response) < 32 {
+		log.Println("Lost data while power on!")
+	}
+	return nil
+}
+
+func (s Socket) Close() {
+	_ = s.conn.Close()
+}
+
+func readResponse(conn net.Conn) ([]byte, error) {
+	return readTimeout(conn)
+}
+
+func readTimeout(conn net.Conn) ([]byte, error) {
+	resultChan := make(chan int)
+	errChan := make(chan error, 1)
+	buffer := make([]byte, MaxBufferSize)
+	go func() {
+		err := conn.SetReadDeadline(deadline())
+		if err != nil {
+			errChan <- err
+			return
+		}
+		n, err := conn.Read(buffer)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		resultChan <- n
+	}()
+
+	select {
+	case result := <-resultChan:
+		return buffer[:result], nil
+	case err := <-errChan:
+		return nil, err
+	}
+}
+
+var timeout = 2 * time.Second
+
+func deadline() time.Time {
+	return time.Now().Add(timeout)
 }

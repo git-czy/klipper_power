@@ -13,7 +13,7 @@ type DeviceKey struct {
 	iv  [16]byte
 }
 
-func DeviceKeyFromToken(token [16]byte) DeviceKey {
+func DeviceKeyFromToken(token []byte) DeviceKey {
 	key := Md5Byte(token[:])
 	return DeviceKey{
 		key: key,
@@ -31,26 +31,26 @@ func Md5Byte(chunks ...[]byte) [16]byte {
 	return result
 }
 
-func Encrypt(deviceKey DeviceKey, data []byte) []byte {
-	block, err := aes.NewCipher(deviceKey.key[:])
+func (d DeviceKey) Encrypt(data []byte) []byte {
+	block, err := aes.NewCipher(d.key[:])
 	if err != nil {
 		log.Println("New cipher failed at encrypt" + err.Error())
 		return nil
 	}
-	mode := cipher.NewCBCEncrypter(block, deviceKey.iv[:])
+	mode := cipher.NewCBCEncrypter(block, d.iv[:])
 	padData := pad(data, mode.BlockSize())
 	res := make([]byte, len(padData))
 	mode.CryptBlocks(res, padData)
 	return res
 }
 
-func Decrypt(deviceKey DeviceKey, data []byte) []byte {
-	block, err := aes.NewCipher(deviceKey.key[:])
+func (d DeviceKey) Decrypt(data []byte) []byte {
+	block, err := aes.NewCipher(d.key[:])
 	if err != nil {
 		log.Println("New cipher failed at decrypt" + err.Error())
 		return nil
 	}
-	mode := cipher.NewCBCDecrypter(block, deviceKey.iv[:])
+	mode := cipher.NewCBCDecrypter(block, d.iv[:])
 	res := make([]byte, len(data))
 	mode.CryptBlocks(res, data)
 	return res

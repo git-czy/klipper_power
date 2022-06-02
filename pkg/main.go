@@ -5,17 +5,16 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"strings"
 )
 
 const (
 	SERVER_IP       = "127.0.0.1"
 	SERVER_PORT     = 54321
-	SERVER_RECV_LEN = 10
+	SERVER_RECV_LEN = 1024
 )
 
 func main() {
-	fmt.Println("start udp server")
+	fmt.Println("start udp http")
 	address := SERVER_IP + ":" + strconv.Itoa(SERVER_PORT)
 	addr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
@@ -41,16 +40,16 @@ func main() {
 		}
 
 		strData := string(data)
-		fmt.Println("Received:", strData)
+		fmt.Println("Received:", []byte(strData))
+		fmt.Println("len:", len([]byte(strData)))
 
-		upper := strings.ToUpper(strData)
-		_, err = conn.WriteToUDP([]byte(upper), rAddr)
+		_, err = conn.WriteToUDP([]byte(strData), rAddr)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
 
-		fmt.Println("Send:", upper)
+		fmt.Println("Send:", []byte(strData))
 	}
 
 }

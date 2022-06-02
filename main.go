@@ -2,56 +2,46 @@ package main
 
 import (
 	"fmt"
+	"klipper_power/pkg/http"
 	"klipper_power/pkg/plug"
-	"syscall"
 )
 
 const (
-	IP       string = "127.0.0.1"
-	PORT     int    = 54321
-	RECV_LEN        = 1024
-	TOKEN    string = "ac03b24f88acfb0937942bddc46be066"
+	IP          string = "127.0.0.1"
+	PORT        int    = 54321
+	TOKEN       string = "ac03b24f88acfb0937942bddc46be066"
+	KLIPPER_URI string = "http://106.55.18.128:8001/v1/deploy/git_auth"
+	DURING      int    = 5
 )
 
 func main() {
-	//udpAddr, err := net.ResolveUDPAddr("udp4", IP+":"+strconv.Itoa(PORT))
+	//conn, err := plug.NewSocket(IP, PORT, TOKEN)
 	//if err != nil {
-	//	fmt.Println(err)
 	//	return
 	//}
-	//
-	//conn, err := net.DialUDP("udp4", nil, udpAddr)
 	//defer conn.Close()
-
-	token := [16]byte{}
-	bToken, _ := syscall.ByteSliceFromString(TOKEN)
-	copy(token[:], bToken[:])
-
-	req := plug.DiscoverRequest(token)
-
-	fmt.Println(req)
-	//Len := unsafe.Sizeof(req)
-	//testBytes := &SliceMock{
-	//	addr: uintptr(unsafe.Pointer(&req)),
-	//	cap:  int(Len),
-	//	len:  int(Len),
-	//}
-	//data := *(*[]byte)(unsafe.Pointer(testBytes))
-	//_, err = conn.Write(req)
-	//if err != nil {
-	//	fmt.Println(err)
+	//
+	//if err = conn.Discover(); err != nil {
+	//	fmt.Printf("discover failed: %s", err.Error())
 	//	return
 	//}
 	//
-	//var buf [1024]byte
-	//_, err = conn.Read(buf[0:])
-	//Struct := *(**Request)(unsafe.Pointer(&data))
-	//fmt.Println(Struct)
-}
+	//err = conn.PowerOff()
+	//if err != nil {
+	//	fmt.Println(err.Error())
+	//	return
+	//}
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println(r)
+		}
+	}()
+	conn, err := plug.NewSocket(IP, PORT, TOKEN)
+	if err != nil {
+		panic(err)
+	}
 
-type DID struct {
-	did   string
-	siid  uint8
-	piid  uint8
-	value bool
+	go http.HandleKlipper(KLIPPER_URI, conn, DURING)
+	go http.StartServer(conn)
+
 }
